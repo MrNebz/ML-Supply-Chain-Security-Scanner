@@ -11,13 +11,18 @@ We deliberately avoid pytest's tmp_path fixture together with @given
 (hypothesis warns against function-scoped fixtures being re-used across
 many generated examples) -- instead each test manages its own scratch
 file path directly.
+
+Settings (max_examples, deadline, health check suppression) come from
+the active hypothesis profile registered in conftest.py, not hardcoded
+here -- see conftest.py for why (a hung CI run with no per-example
+deadline at all was the reason this changed).
 """
 
 import random
 import tempfile
 from pathlib import Path
 
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
 from mlscan.scanners.h5_scanner import scan_h5
@@ -28,8 +33,6 @@ _SCRATCH_DIR = Path(tempfile.mkdtemp(prefix="mlscan_fuzz_"))
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
-_SUPPRESSED_HEALTH_CHECKS = [HealthCheck.function_scoped_fixture]
-
 
 def _write_and_scan(scanner, suffix: str, data: bytes):
     path = _SCRATCH_DIR / f"fuzz{suffix}"
@@ -37,21 +40,18 @@ def _write_and_scan(scanner, suffix: str, data: bytes):
     return scanner(path)
 
 
-@settings(max_examples=200, deadline=None)
 @given(st.binary(min_size=0, max_size=4096))
 def test_pickle_scanner_never_crashes_on_random_bytes(data):
     findings = _write_and_scan(scan_pickle, ".pkl", data)
     assert isinstance(findings, list)
 
 
-@settings(max_examples=200, deadline=None)
 @given(st.binary(min_size=0, max_size=4096))
 def test_onnx_scanner_never_crashes_on_random_bytes(data):
     findings = _write_and_scan(scan_onnx, ".onnx", data)
     assert isinstance(findings, list)
 
 
-@settings(max_examples=200, deadline=None)
 @given(st.binary(min_size=0, max_size=4096))
 def test_h5_scanner_never_crashes_on_random_bytes(data):
     findings = _write_and_scan(scan_h5, ".h5", data)
@@ -85,7 +85,6 @@ _SCANNER_BY_SUFFIX = {
 }
 
 
-@settings(max_examples=100, deadline=None, suppress_health_check=_SUPPRESSED_HEALTH_CHECKS)
 @given(
     fixture_index=st.integers(min_value=0, max_value=len(_REAL_FIXTURE_FILES) - 1),
     seed=st.integers(min_value=0, max_value=2**32 - 1),

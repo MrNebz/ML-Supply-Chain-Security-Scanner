@@ -21,6 +21,7 @@ dev = [
     "ruff>=0.5",
     "huggingface_hub>=0.23",
     "hypothesis>=6.100",
+    "pytest-timeout>=2.3",
 ]
 ml = [
     "scikit-learn>=1.4",
@@ -35,3 +36,11 @@ where = ["src"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.pytest.ini_options]
+# Global safety net: no single test may run longer than this, regardless
+# of cause. A test suite that can hang indefinitely is worse than one
+# that fails loudly -- this is the same fail-safe philosophy the scanner
+# itself follows (see PICKLE_PARSE_ERROR, ONNX_PARSE_ERROR, etc.).
+# Found necessary in practice: CI hung for 1.5h+ with no timeout at all.
+timeout = 120
