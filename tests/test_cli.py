@@ -19,6 +19,8 @@ def _run_cli(*args):
         [sys.executable, "-m", "mlscan.cli", *args],
         capture_output=True,
         text=True,
+        stdin=subprocess.DEVNULL,
+        timeout=30,
     )
 
 

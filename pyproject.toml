@@ -22,6 +22,10 @@ dev = [
     "huggingface_hub>=0.23",
     "hypothesis>=6.100",
 ]
+ml = [
+    "scikit-learn>=1.4",
+    "skops>=0.10",
+]
 
 [project.scripts]
 mlscan = "mlscan.cli:main"

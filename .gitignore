@@ -11,3 +11,5 @@ dist/
 .vscode/
 .idea/
 *.log
+training_data/
+.claude/

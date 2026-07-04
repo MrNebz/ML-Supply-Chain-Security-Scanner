@@ -8,6 +8,11 @@ from mlscan.report import Finding, Severity
 from mlscan.scanners.h5_scanner import scan_h5
 from mlscan.scanners.onnx_scanner import scan_onnx
 from mlscan.scanners.pickle_scanner import scan_pickle
+from mlscan.scanners.pickle_scanner.anomaly import (
+    AnomalyModelUnavailable,
+    ensure_available,
+    score_pickle_anomaly,
+)
 
 _EXIT_SEVERITY = {Severity.CRITICAL, Severity.HIGH}
 
@@ -26,6 +31,14 @@ def main(argv=None) -> int:
     parser.add_argument("path", help="Path to a model file to scan")
     parser.add_argument(
         "--json", action="store_true", help="Emit findings as JSON instead of human-readable text"
+    )
+    parser.add_argument(
+        "--ml",
+        action="store_true",
+        help=(
+            "Also run the experimental ML anomaly-detection layer for pickle "
+            "files (requires the 'ml' extra: pip install -e \".[ml]\")"
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -60,6 +73,22 @@ def main(argv=None) -> int:
         )
 
     findings.extend(_SCANNERS[file_format](path))
+
+    if args.ml:
+        if file_format == "pickle":
+            try:
+                ensure_available()
+                anomaly_finding = score_pickle_anomaly(path)
+                if anomaly_finding is not None:
+                    findings.append(anomaly_finding)
+            except AnomalyModelUnavailable as exc:
+                print(f"warning: --ml requested but unavailable: {exc}", file=sys.stderr)
+        else:
+            print(
+                f"warning: --ml is currently only implemented for pickle files, "
+                f"skipping for format '{file_format}'",
+                file=sys.stderr,
+            )
 
     if args.json:
         _print_json(path, file_format, findings)

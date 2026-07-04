@@ -61,6 +61,15 @@ def extract_global_refs(data: bytes) -> tuple[list[GlobalRef], Exception | None]
     return refs, parse_error
 
 
+def parse_opcodes(data: bytes) -> tuple[list, Exception | None]:
+    """
+    Public entry point for callers (e.g. the optional ML feature
+    extractor) that need the raw (opcode, arg, pos) tuples themselves,
+    not just the higher-level refs/literals views above.
+    """
+    return _safe_genops(data)
+
+
 def extract_string_literals(data: bytes) -> list[tuple[str, int]]:
     """
     Every plain string literal pushed anywhere in the stream, with its
