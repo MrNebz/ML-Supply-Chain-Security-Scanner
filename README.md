@@ -22,8 +22,11 @@ model supply chain.
 ## Status
 
 🚧 Active development — pickle (incl. zip-wrapped PyTorch checkpoints), ONNX,
-and HDF5/Keras scanners implemented and tested (76 tests: hand-crafted,
+and HDF5/Keras scanners implemented and tested (82 tests: hand-crafted,
 parametrized, real-world, fuzzed, CLI-level, and multi-finding combinations).
+An optional, experimental ML anomaly layer also exists (see below) — trained
+and evaluated, currently shows no measurable benefit over the rule-based
+scanners and is documented honestly as a negative result.
 
 ## Install (dev)
 
@@ -145,6 +148,49 @@ Ran `modelscan -p tests/fixtures` against our full fixture set:
 | `gadget_chain_subclasses.pkl` (`int.__subclasses__` gadget) | ✅ flagged CRITICAL `PICKLE_GADGET_CHAIN_ATTRIBUTE` | Not tested against this version — not included in the standard scan output categories observed |
 
 Reproduce: `pip install modelscan && modelscan -p tests/fixtures --show-skipped`
+
+## Optional ML anomaly-detection layer (experimental — `--ml`)
+
+A secondary, opt-in signal layered on top of the rule-based pickle scanner:
+an `IsolationForest` trained on opcode-derived structural features
+(22 dimensions — 9 scalars like byte length/entropy/opcode counts, plus
+frequency counts for 13 security-relevant opcodes such as `GLOBAL`,
+`REDUCE`, `BUILD`, `NEWOBJ`), fit on benign pickle files only. Requires
+`pip install -e ".[ml]"`; degrades gracefully to "no additional finding"
+if that extra isn't installed.
+
+**Training data required real cleanup.** `scripts/download_ml_training_corpus.py`
+pulls benign pickle files from HuggingFace Hub — but naive keyword search
+(`pkl`, `pickle`, `joblib`, ...) surfaces a large amount of genuinely
+malicious/proof-of-concept content published by security researchers
+(repos named things like `pickle-scanner-bypass-*`, `*-rce-poc`,
+`malicious_model.pkl`), not just real benign models. Of 214 candidate
+files collected, **our own rule-based scanner flagged and rejected 75
+of them (35%)** before training — using `mlscan` itself as a
+data-quality gate on its own training data. 139 genuine samples survived
+to train on.
+
+**Honest result: this layer currently adds no measurable detection
+power.** Evaluated against our fixture set
+(`scripts/evaluate_anomaly_model.py`), the model's raw anomaly scores
+show no separation between benign and malicious pickle files — the
+known-malicious fixtures actually scored *slightly more "normal"* than
+one of the benign files. This isn't a calibration/threshold issue (we
+checked the raw `decision_function` scores directly, not just the
+pass/fail label). The root cause: our malicious fixtures are minimal,
+single-`GLOBAL`+`REDUCE` payloads that are structurally simple — low
+opcode diversity, small size — which doesn't register as "unusual" by
+any of the 22 gross structural statistics this layer tracks. What makes
+them dangerous is *semantic* (which specific callable is referenced),
+not *structural*, and that's exactly what the rule-based scanner already
+checks directly. This is a legitimate negative result, not a bug: it
+demonstrates concretely why gross structural/statistical ML features
+can't substitute for rule-based semantic checks on this kind of file,
+rather than just asserting that claim.
+
+Reproduce: `python scripts/download_ml_training_corpus.py && python
+scripts/train_pickle_anomaly_model.py && python
+scripts/evaluate_anomaly_model.py`
 
 ## References
 

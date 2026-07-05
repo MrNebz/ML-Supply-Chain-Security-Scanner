@@ -22,6 +22,7 @@ import skops.io as sio
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 
+from mlscan.scanners.pickle_scanner import scan_pickle
 from mlscan.scanners.pickle_scanner.container import load_pickle_bytes
 from mlscan.scanners.pickle_scanner.features import extract_features
 
@@ -54,13 +55,36 @@ def main():
 
     features = []
     used_paths = []
+    rejected = 0
     for path in paths:
         try:
+            # Data-quality gate: HuggingFace Hub search results for terms
+            # like "pkl"/"pickle" surface a lot of genuinely malicious/PoC
+            # pickle files published by security researchers (repos named
+            # things like "pickle-scanner-bypass-*", "poc_rce_*",
+            # "malicious_model.pkl") right alongside real benign models --
+            # discovered by inspecting actual download output, not
+            # hypothetically. Training an anomaly detector on a "benign"
+            # set contaminated with real attacks would defeat the entire
+            # point, so we use our OWN rule-based scanner to certify each
+            # candidate is clean before it's allowed into the training set.
+            findings = scan_pickle(path)
+            if findings:
+                rejected += 1
+                continue
+
             data = load_pickle_bytes(path)
             features.append(extract_features(data))
             used_paths.append(path)
         except Exception as exc:
             print(f"skip {path}: {exc}")
+
+    if rejected:
+        print(
+            f"Rejected {rejected} candidate file(s) that our own scanner flagged "
+            "(likely malicious/PoC files mixed into the HuggingFace search results, "
+            "not genuine benign models)."
+        )
 
     if len(features) < 10:
         raise SystemExit(

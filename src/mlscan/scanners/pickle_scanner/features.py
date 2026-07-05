@@ -13,15 +13,44 @@ require the ml extra to be installed.
 """
 
 import math
-import pickletools
 from collections import Counter
 
 from mlscan.scanners.pickle_scanner.opcodes import parse_opcodes
 
-# Canonical, stable list of every opcode name pickletools knows about --
-# sourced from the stdlib itself, so the feature vector's length and
-# meaning never depends on what happens to appear in a given file.
-_ALL_OPCODE_NAMES = sorted({op.name for op in pickletools.opcodes})
+# Deliberately NOT every opcode pickletools knows about (~68 of them) --
+# with a training corpus in the hundreds of samples, a ~77-dimensional
+# feature vector puts sample count below dimension count, which makes
+# any unsupervised model closer to memorizing training points than
+# learning a real distribution. Keeping only the opcodes that actually
+# carry security signal (code-execution / external-reference primitives)
+# cuts this to a dimensionality a few-hundred-sample corpus can support:
+#   - GLOBAL / STACK_GLOBAL: module/class reference -- the core of the
+#     __reduce__ exploit pattern
+#   - REDUCE: function call -- the other half of that pattern
+#   - BUILD: __setstate__ application (a documented alternate gadget path,
+#     see Huang, Huang & Huang "Pain Pickle", IEEE QRS 2022)
+#   - INST / OBJ: older (pre-protocol-2) instance-creation opcodes
+#   - NEWOBJ / NEWOBJ_EX: modern instance-creation opcodes
+#   - PERSID / BINPERSID: persistent-id external-reference mechanism
+#   - EXT1 / EXT2 / EXT4: the extension-registry mechanism -- obscure,
+#     but another way to reference code outside the pickle stream itself
+_SECURITY_RELEVANT_OPCODE_NAMES = sorted(
+    {
+        "GLOBAL",
+        "STACK_GLOBAL",
+        "REDUCE",
+        "BUILD",
+        "INST",
+        "OBJ",
+        "NEWOBJ",
+        "NEWOBJ_EX",
+        "PERSID",
+        "BINPERSID",
+        "EXT1",
+        "EXT2",
+        "EXT4",
+    }
+)
 
 _GLOBAL_OPCODE_NAMES = {"GLOBAL", "STACK_GLOBAL"}
 
@@ -49,7 +78,9 @@ _SCALAR_FEATURE_NAMES = [
 
 
 def feature_names() -> list[str]:
-    return _SCALAR_FEATURE_NAMES + [f"opcode_freq::{name}" for name in _ALL_OPCODE_NAMES]
+    return _SCALAR_FEATURE_NAMES + [
+        f"opcode_freq::{name}" for name in _SECURITY_RELEVANT_OPCODE_NAMES
+    ]
 
 
 def extract_features(data: bytes) -> list[float]:
@@ -83,7 +114,7 @@ def extract_features(data: bytes) -> list[float]:
 
     opcode_freqs = [
         (counts.get(name, 0) / opcode_count) if opcode_count else 0.0
-        for name in _ALL_OPCODE_NAMES
+        for name in _SECURITY_RELEVANT_OPCODE_NAMES
     ]
 
     return scalars + opcode_freqs
