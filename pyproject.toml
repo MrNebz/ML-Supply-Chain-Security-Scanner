@@ -22,10 +22,15 @@ dev = [
     "huggingface_hub>=0.23",
     "hypothesis>=6.100",
     "pytest-timeout>=2.3",
+    "pytest-html>=4.2",
+    "pytest-cov>=5.0",
 ]
 ml = [
     "scikit-learn>=1.4",
     "skops>=0.10",
+]
+ui = [
+    "streamlit>=1.30",
 ]
 
 [project.scripts]

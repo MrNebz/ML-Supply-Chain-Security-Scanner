@@ -13,3 +13,6 @@ dist/
 *.log
 training_data/
 .claude/
+test_report.html
+htmlcov/
+.coverage

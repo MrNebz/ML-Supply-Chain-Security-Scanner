@@ -48,10 +48,29 @@ parse / zip structure), not just the extension — a malicious pickle
 renamed to `.onnx`, or a malicious zip-wrapped PyTorch checkpoint renamed
 to any other extension, is still caught and scanned as a pickle.
 
+## Interactive scanner (Streamlit)
+
+```bash
+pip install -e ".[ui]"
+streamlit run ui/app.py
+```
+
+Opens a local browser page with drag-and-drop file upload. This calls the
+exact same `scan_pickle`/`scan_onnx`/`scan_h5` functions the CLI uses —
+nothing is uploaded anywhere, and the file is only parsed, never executed.
+
 ## Testing
 
 ```bash
 pytest -v
+```
+
+For an interactive HTML test report (pass/fail per test) and an HTML
+coverage report, generated fresh from the current test suite:
+
+```bash
+python scripts/generate_test_report.py
+# then open test_report.html and htmlcov/index.html
 ```
 
 Coverage combines five sources, deliberately not just hand-crafted fixtures:
