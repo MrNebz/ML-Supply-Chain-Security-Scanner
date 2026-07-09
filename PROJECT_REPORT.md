@@ -1,8 +1,9 @@
 # mlscan: A Static Security Scanner for the ML Model Supply Chain
 ### Final Project Report
 
-**Author:** Elie Abou Jaoude
-**Repository:** https://github.com/MrNebz/ML-Supply-Chain-Security-Scanner
+**Author:** Naji Bou Zeid
+**LinkedIn:** [www.linkedin.com/in/naji-bou-zeid-a4aa99332]
+**Email:** naji.elia.bouzeid@gmail.com
 **Context:** Independent research project at the intersection of artificial intelligence and applied cybersecurity
 
 ---
@@ -22,9 +23,8 @@ supply chain instead.
 The project is deliberately scoped as **cybersecurity applied to AI artifacts**,
 not AI applied to cybersecurity: the tool itself contains no trained model in
 its primary detection path. An optional, secondary ML layer was built and
-evaluated separately, and its results — including a negative one — are
-reported honestly in the final section, since a defensible negative result is
-more valuable, scientifically, than an oversold positive one.
+evaluated separately, and its results — both positive and negative ones — are
+reported in the final section.
 
 Over the course of development, five real bugs were found and fixed through
 adversarial testing (fuzzing, real-world data, and benchmarking) rather than
@@ -48,34 +48,11 @@ securing the AI development lifecycle itself, by treating ML model artifacts
 as untrusted input and applying classical software-security engineering —
 static analysis, file-format reverse engineering, fuzzing — to them.
 
-This niche was chosen first, ahead of more conventional AI-security work,
-for reasons intrinsic to the discipline rather than external ones: it
-requires no training dataset and no GPU, which keeps the engineering loop
-tight; it sits almost entirely outside the well-trodden "train a classifier"
-pattern that dominates most AI-security work; and it demands a genuinely
-different skill set — file-format internals, static analysis design, and
-adversarial testing methodology — that complements, rather than duplicates,
+This project requires no training dataset and no GPU, which keeps the engineering loop tight; it sits almost entirely outside the well-trodden "train a classifier" pattern that dominates most AI-security work; and it demands a genuinely different skill set — file-format internals, static analysis design, and adversarial testing methodology — that complements, rather than duplicates,
 more conventional machine-learning work.
 
-### 1.2 Framing: security *of* AI, not AI *for* security
 
-This distinction was established early and held throughout the project. Two
-directions exist within the "AI + cybersecurity" space:
-
-- **AI for security** — using machine learning as a tool to solve a security
-  problem (e.g., a malware classifier, an anomaly-detection IDS).
-- **Security for AI** — treating the AI development lifecycle itself as the
-  attack surface, and applying classical security engineering (static
-  analysis, fuzzing, format parsing) to it.
-
-`mlscan` sits entirely in the second category for its primary detection path.
-This is a deliberate choice, not an oversight: it reflects a specific,
-underserved skill — understanding the AI supply chain well enough to find
-where it breaks, security-wise — that is distinct from, and complementary to,
-the ability to train a model, and one that is comparatively rare in current
-practice.
-
-### 1.3 The supply-chain problem, concretely
+### 1.2 The supply-chain problem, concretely
 
 The premise of the project is simple to state and easy to underestimate:
 when you download a "pretrained model" from a hub, a colleague's repository,
@@ -679,8 +656,6 @@ Python tooling that both tools rely on."
 
 ## 9. Known limitations
 
-Documented honestly rather than hidden, consistent with the project's
-overall approach:
 
 - **Pickle protocol 0/1 detection**: content-sniffing relies on the `PROTO`
   opcode, present only in protocol ≥ 2. Older ASCII-based protocols have no
@@ -783,7 +758,7 @@ own training pipeline. 139 genuine samples survived to train on, giving an
 n/d ratio of roughly 6, short of the ideal ~10-15 but a substantial
 improvement over the uncorrected design's ratio of roughly 0.5.
 
-### 10.5 Evaluation, and an honest negative result
+### 10.5 Evaluation and result
 
 The trained model was evaluated against the project's own benign and
 malicious fixture sets. The result: **zero measurable separation** between
@@ -805,45 +780,11 @@ table. A small, simple, low-entropy pickle stream does not look unusual by
 gross statistics whether it is benign or malicious; the two classes are
 distinguished by *meaning*, not by *shape*.
 
-This is reported as a legitimate, informative negative result rather than
-hidden or reframed. It demonstrates concretely — not merely by assertion —
-why purely structural/statistical ML features cannot substitute for
-rule-based semantic analysis on this class of file, which is itself a
-defensible methodological conclusion: building the experiment, evaluating it
-rigorously, and reporting what it actually showed is more valuable than a
-result quietly engineered to look successful.
+This is reported as a legitimate, informative negative result. It demonstrates concretely — not merely by assertion — why purely structural/statistical ML features cannot always substitute for rule-based semantic analysis on this class of file.
 
 ---
 
-## 11. Reflections
-
-Several methodological patterns proved more valuable than any individual
-line of detection logic:
-
-- **Every real bug in this project was found by testing methodology, not by
-  reading code more carefully.** Parametrized testing across full rule
-  tables, real-world data, fuzzing, and cross-tool benchmarking each found a
-  distinct class of defect the others could not. A project that only wrote
-  unit tests for its own hand-picked examples would have shipped with at
-  least five known, findable bugs.
-- **A security tool must fail loudly, never silently.** The single idea
-  repeated across all three scanners (`PICKLE_PARSE_ERROR`, `ONNX_PARSE_ERROR`,
-  `H5_PARSE_ERROR`) and even applied to the CI pipeline itself (Section 6.6)
-  is that an unhandled failure mode is a bypass vector, and the correct fix
-  is always to convert "crash or silently pass" into "flag as suspicious."
-- **A negative result, honestly reported and explained, is a legitimate
-  research contribution.** The ML experiment's value is not diminished by
-  its outcome; it is demonstrated by the rigor of how that outcome was
-  established and explained.
-- **Benchmarking against a real, independent tool is more convincing than
-  any internal test suite.** The ModelScan comparison surfaced both a
-  genuine capability gap (ONNX support) and independent confirmation of a
-  limitation we had already found ourselves (the joblib parsing issue),
-  which is a stronger claim than either result in isolation.
-
----
-
-## 12. References
+## 11. References
 
 - M. Slaviero, "Playing with Python Pickle," SensePost (2010); "Sour Pickles," BlackHat (2011).
 - E. Sultanik, "Never a dill moment: Exploiting machine learning pickle files," Trail of Bits (2021) — [`fickling`](https://github.com/trailofbits/fickling)
@@ -855,4 +796,4 @@ line of detection logic:
 
 ---
 
-*Repository: [github.com/MrNebz/ML-Supply-Chain-Security-Scanner](https://github.com/MrNebz/ML-Supply-Chain-Security-Scanner). See `README.md` for installation and usage instructions; this document is the project's technical narrative and rationale, not its operating manual.*
+*LinkedIn: [www.linkedin.com/in/naji-bou-zeid-a4aa99332]. See `README.md` for installation and usage instructions; this document is the project's technical narrative and rationale, not its operating manual.*
