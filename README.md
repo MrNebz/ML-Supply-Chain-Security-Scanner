@@ -1,226 +1,292 @@
 # mlscan — ML Model Supply-Chain Security Scanner
 
-Static analysis tool that scans ML model files (`.pkl`/`.pt`, `.onnx`, `.h5`) for
-embedded malicious payloads and unsafe deserialization patterns, without ever
-executing the file.
+[![CI](https://github.com/MrNebz/ML-Supply-Chain-Security-Scanner/actions/workflows/ci.yml/badge.svg)](https://github.com/MrNebz/ML-Supply-Chain-Security-Scanner/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#requirements)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-## Why
-
-- **Pickle** (`.pkl`, and PyTorch's `.pt`/`.pth`) is a bytecode format — loading one
-  can execute arbitrary code via crafted `GLOBAL`/`REDUCE` opcodes.
-- **ONNX** files are protobuf computation graphs — safe from code execution by
-  design, but can hide oversized nodes, path-traversal via external data
-  references, or malicious custom operators.
-- **HDF5/Keras** (`.h5`) models can embed `Lambda` layers whose config contains
-  marshalled Python bytecode, executed on load if `custom_objects` trust isn't
-  restricted.
-
-`mlscan` parses each format as structured data and flags dangerous patterns —
-similar in spirit to how `Trivy` scans container images, applied to the ML
+A static-analysis security scanner for machine-learning model files —
+**pickle** (`.pkl`, PyTorch `.pt`/`.pth`), **ONNX** (`.onnx`), and
+**HDF5/Keras** (`.h5`). It inspects each file as structured data and flags
+dangerous patterns (arbitrary code execution, path traversal, gadget chains,
+malicious operators) **without ever loading or executing the model** — the
+same idea as `Trivy` or `Grype` for container images, applied to the ML
 model supply chain.
 
-## Status
+> **📖 Read this first:** the full technical write-up — how each format's
+> vulnerability class works from first principles, every bug found during
+> development and how it was found, the design rationale, the benchmark
+> against ModelScan, and the ML anomaly-detection experiment (including its
+> honest negative result) — lives in **[`PROJECT_REPORT.md`](PROJECT_REPORT.md)**.
+> This README only covers *how to get the project running*. If you want to
+> understand *what it does and why it works the way it does*, start there.
 
-🚧 Active development — pickle (incl. zip-wrapped PyTorch checkpoints), ONNX,
-and HDF5/Keras scanners implemented and tested (82 tests: hand-crafted,
-parametrized, real-world, fuzzed, CLI-level, and multi-finding combinations).
-An optional, experimental ML anomaly layer also exists (see below) — trained
-and evaluated, currently shows no measurable benefit over the rule-based
-scanners and is documented honestly as a negative result.
+---
 
-## Install (dev)
+## Table of contents
+
+- [What this project is](#what-this-project-is)
+- [Threats detected, by format](#threats-detected-by-format)
+- [Repository layout](#repository-layout)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick start (CLI)](#quick-start-cli)
+- [Interactive scanner (Streamlit UI)](#interactive-scanner-streamlit-ui)
+- [Optional ML anomaly-detection layer](#optional-ml-anomaly-detection-layer)
+- [Running the tests](#running-the-tests)
+- [Benchmark vs. ModelScan](#benchmark-vs-modelscan)
+- [Known limitations](#known-limitations)
+- [Continuous integration](#continuous-integration)
+- [Reference material](#reference-material)
+- [License](#license)
+
+## What this project is
+
+Loading an ML model file isn't a neutral operation for every format:
+
+| Format | Risk | mlscan's approach |
+|---|---|---|
+| Pickle / PyTorch (`.pkl`, `.pt`, `.pth`) | It's a bytecode format — deserializing one can execute arbitrary code | Disassembles the opcode stream and flags dangerous `GLOBAL`/`REDUCE` calls, restricted-unpickler gadget chains, and known scanner-bypass techniques, **without calling `pickle.load`** |
+| ONNX (`.onnx`) | Protobuf graph, safe from code execution by design, but can hide path traversal, oversized tensors, or malicious custom operators | Parses the protobuf graph structure directly |
+| HDF5 / Keras (`.h5`) | Can embed a `Lambda` layer whose config contains marshalled Python bytecode, executed on load | Inspects the HDF5 model config for unsafe `Lambda` payloads |
+
+Detection is **content-based, not extension-based**: a malicious pickle
+renamed to `.onnx`, or a malicious zip-wrapped PyTorch checkpoint renamed to
+anything else, is still identified by its actual content and scanned
+correctly.
+
+For the *why* and *how* behind every rule above, see
+**[`PROJECT_REPORT.md`](PROJECT_REPORT.md)**.
+
+## Threats detected, by format
+
+<details>
+<summary>Pickle / PyTorch</summary>
+
+- Dangerous `GLOBAL`+`REDUCE` calls (e.g. `os.system`, `subprocess.*`, `eval`, `exec`)
+- Restricted-unpickler gadget chains (`__subclasses__`, `__globals__`, `__builtins__`, `__base__`, `__bases__`, `__mro__`)
+- The disclosed `pickletools` base-10 vs. base-0 integer-parsing bypass
+- Zip-wrapped PyTorch checkpoints (`torch.save()` since 1.6) — unwrapped and scanned
+- Malformed/truncated streams reported as a finding, not a silent pass or a crash
+
+</details>
+
+<details>
+<summary>ONNX</summary>
+
+- External-data path traversal
+- Malicious/unexpected custom operator domains
+- Oversized declared tensor dimensions
+
+</details>
+
+<details>
+<summary>HDF5 / Keras</summary>
+
+- `Lambda` layers containing marshalled Python bytecode (CRITICAL)
+- `Lambda` layers referencing a named function by string (MEDIUM)
+
+</details>
+
+## Repository layout
+
+```
+.
+├── src/mlscan/                  # the library + CLI
+│   ├── cli.py                  # `mlscan` command entry point
+│   ├── detect.py                # content-based format sniffing
+│   ├── report.py                # Finding / Severity data model
+│   ├── models/pickle_anomaly.skops   # trained optional ML model artifact
+│   └── scanners/
+│       ├── pickle_scanner/      # opcode disassembly, rules, gadget-chain + anomaly detection
+│       ├── onnx_scanner/        # protobuf graph inspection + rules
+│       └── h5_scanner/          # HDF5 Lambda-layer inspection
+├── scripts/                      # fixture generation, HF corpus download, ML training/eval, test-report generation
+├── tests/                        # pytest suite (unit, parametrized, fuzz, CLI, real-world fixtures)
+│   └── fixtures/                 # benign + malicious sample files used by tests
+├── ui/app.py                     # local Streamlit drag-and-drop scanner
+├── related materials/            # source papers referenced in PROJECT_REPORT.md
+├── PROJECT_REPORT.md              # full technical write-up — read this for the "why"
+├── README.md                      # this file — the "how to run it" guide
+└── pyproject.toml                 # packaging, dependencies, optional extras
+```
+
+## Requirements
+
+- Python **3.10+**
+- Git
+- (Optional) a virtual environment tool — `venv` is used below, but `conda`/`uv` work identically
+
+## Installation
+
+Clone the repository and install it in editable mode inside a virtual
+environment:
 
 ```bash
+git clone https://github.com/MrNebz/ML-Supply-Chain-Security-Scanner.git
+cd ML-Supply-Chain-Security-Scanner
+
 python -m venv .venv
-.venv\Scripts\activate      # Windows
+
+# Activate the virtual environment
+.venv\Scripts\activate        # Windows
+source .venv/bin/activate     # macOS / Linux
+
 pip install -e ".[dev]"
 ```
 
-## Usage
+This installs the core scanner plus everything needed to run the test
+suite. Two more optional extras exist and can be combined as needed:
 
 ```bash
-mlscan path/to/model.pkl
-mlscan --json path/to/model.onnx
+pip install -e ".[ml]"   # optional ML anomaly-detection layer (scikit-learn, skops)
+pip install -e ".[ui]"   # interactive Streamlit scanner
+pip install -e ".[dev,ml,ui]"   # everything at once
 ```
 
-File format is detected from actual file content (magic bytes / protobuf
-parse / zip structure), not just the extension — a malicious pickle
-renamed to `.onnx`, or a malicious zip-wrapped PyTorch checkpoint renamed
-to any other extension, is still caught and scanned as a pickle.
+Verify the install:
 
-## Interactive scanner (Streamlit)
+```bash
+mlscan --help
+```
+
+## Quick start (CLI)
+
+```bash
+# Scan a single file — human-readable output
+mlscan path/to/model.pkl
+
+# Machine-readable JSON output (for CI pipelines / tooling integration)
+mlscan --json path/to/model.onnx
+
+# Also run the optional ML anomaly-detection layer on a pickle file
+# (requires: pip install -e ".[ml]")
+mlscan --ml path/to/model.pkl
+```
+
+**Exit codes**: `mlscan` returns `1` if any `CRITICAL` or `HIGH` severity
+finding is reported, and `0` otherwise — safe to wire directly into a CI
+pipeline as a gate. Format-detection failure returns `2`.
+
+Example output:
+
+```
+$ mlscan tests/fixtures/malicious/reduce_os_system.pkl
+tests/fixtures/malicious/reduce_os_system.pkl: 1 finding(s)
+  [CRITICAL] PICKLE_DANGEROUS_CALL: os.system referenced via GLOBAL+REDUCE
+```
+
+## Interactive scanner (Streamlit UI)
+
+A local, browser-based drag-and-drop scanner that calls the exact same
+`scan_pickle` / `scan_onnx` / `scan_h5` functions as the CLI — nothing is
+uploaded anywhere, and files are only parsed, never executed.
 
 ```bash
 pip install -e ".[ui]"
 streamlit run ui/app.py
 ```
 
-Opens a local browser page with drag-and-drop file upload. This calls the
-exact same `scan_pickle`/`scan_onnx`/`scan_h5` functions the CLI uses —
-nothing is uploaded anywhere, and the file is only parsed, never executed.
+This opens the app in your default browser (typically `http://localhost:8501`).
+Drag a `.pkl`/`.pt`/`.pth`, `.onnx`, or `.h5` file onto the page to see its
+findings rendered live.
 
-## Testing
+## Optional ML anomaly-detection layer
+
+An experimental, opt-in secondary signal for pickle files — an
+`IsolationForest` trained on opcode-derived structural features. It is
+**not a replacement for the rule-based scanner**, and honestly, in its
+current state, **adds no measurable detection power** (see
+[`PROJECT_REPORT.md`, §10](PROJECT_REPORT.md) for the full negative-result
+writeup and why). It ships mainly as a documented, reproducible experiment.
+
+```bash
+pip install -e ".[ml]"
+
+# Reproduce the full pipeline from scratch:
+python scripts/download_ml_training_corpus.py
+python scripts/train_pickle_anomaly_model.py
+python scripts/evaluate_anomaly_model.py
+```
+
+## Running the tests
 
 ```bash
 pytest -v
 ```
 
-For an interactive HTML test report (pass/fail per test) and an HTML
-coverage report, generated fresh from the current test suite:
+For a live, interactive HTML test report and an HTML coverage report,
+generated fresh from the current test suite:
 
 ```bash
 python scripts/generate_test_report.py
-# then open test_report.html and htmlcov/index.html
+# then open test_report.html and htmlcov/index.html in a browser
 ```
 
-Coverage combines five sources, deliberately not just hand-crafted fixtures:
-- **Hand-crafted fixtures** (`tests/fixtures/`) — one example per detection
-  rule, generated via `scripts/generate_*_fixtures.py`.
-- **Parametrized coverage** (`test_*_scanner_parametrized.py`) — every entry
-  in each rule table (every dangerous pickle import, every ONNX domain
-  tier, several Lambda payload variants) is verified individually, not
-  just 1-2 examples.
-- **Real-world fixtures** (`tests/fixtures/benign/real_world/`, pulled via
-  `scripts/download_real_world_fixtures.py`) — real, unmodified files from
-  HuggingFace Hub, used as a false-positive check hand-crafted fixtures
-  can't provide. This is how the ONNX vendor-domain false positive and the
-  joblib parsing limitation below were found.
-- **Fuzz testing** (`test_fuzzing.py`, via `hypothesis`) — random bytes and
-  mutated real fixtures thrown at all three scanners, asserting they never
-  crash. This is the same methodology used by the PickleFuzzer paper cited
-  below, applied to our own tool instead of CPython's pickle modules — it
-  found two real crash bugs (ONNX/H5 scanners crashing on malformed input,
-  and a bytes-vs-str protobuf edge case), both fixed.
-- **CLI-level tests** (`test_cli.py`) — the actual `mlscan` command run as a
-  subprocess, checking exit codes and `--json` output shape, not just the
-  internal Python functions.
-- **Combination fixtures** (`test_combination_findings.py`) — single files
-  triggering more than one rule at once, verifying findings don't mask or
-  interfere with each other.
+The suite (80+ tests) combines hand-crafted fixtures, exhaustive
+parametrized rule-table coverage, real unmodified files pulled from
+HuggingFace Hub, `hypothesis`-based fuzz testing, CLI-level subprocess
+tests, and multi-finding combination fixtures. See
+[`PROJECT_REPORT.md`, §7](PROJECT_REPORT.md) for the full testing
+methodology and what each layer caught.
 
-## Known limitations (found via real-world testing, not hypothetical)
+## Benchmark vs. ModelScan
 
-- **Pickle protocol 0/1 detection**: content-based format sniffing relies
-  on the `PROTO` opcode (protocol ≥ 2). Older ASCII-based pickle protocols
-  have no reliable magic number and fall back to extension-based detection.
-- **joblib's raw-array-embedding convention breaks pure opcode parsing**: a
-  real LightGBM model pulled from HuggingFace Hub
-  (`kojongmo/LightGBM_Q1_model.pkl`) serializes a
-  `joblib.numpy_pickle.NumpyArrayWrapper` object, after which joblib writes
-  the *raw numpy array bytes directly into the file stream* (bypassing
-  pickle opcodes entirely, so its custom loader can mmap the array straight
-  from the file handle). `pickletools` has no way to know to skip those raw
-  bytes, so it tries to interpret them as opcodes and fails — triggering
-  our `PICKLE_PARSE_ERROR` rule as a false positive on this legitimate
-  file. This is a structural limitation of pure opcode-stream analysis
-  when the on-disk format is "pickle + a custom binary-embedding
-  convention," not a bug in our detection logic. **Confirmed this isn't
-  specific to our tool**: ModelScan 0.8.8 hits the exact same parse
-  failure on the same file (see benchmark below). A real fix would require
-  joblib-format-aware recovery (detect `NumpyArrayWrapper`, compute the
-  byte length from its `shape`/`dtype`, skip that many raw bytes, resume
-  opcode parsing) — deliberately not implemented as a blind byte-skip,
-  since that would itself be an evasion vector (nothing stops an attacker
-  emitting a fake `NumpyArrayWrapper` reference specifically to make a
-  scanner treat subsequent bytes as "safe to skip" unchecked). Documented
-  and regression-tested (`tests/test_real_world_fixtures.py`, marked
-  `xfail`) rather than silently worked around.
+Benchmarked against [Protect AI's `modelscan`](https://github.com/protectai/modelscan)
+(v0.8.8) on the full fixture set — `mlscan` adds ONNX support entirely
+absent from that ModelScan version, correctly flags a disclosed
+`pickletools` bypass technique that ModelScan silently excludes from its
+issue count, and distinguishes Keras `Lambda`-layer severities that
+ModelScan reports as a single undifferentiated finding.
 
-## Known techniques this tool defends against
+Reproduce it yourself:
 
-**pickletools/pickle base-10 vs base-0 discrepancy.** `pickletools` (used by
-most pickle scanners, including this one and `picklescan`) parses `INT`/`LONG`
-opcode arguments strictly as base-10, while the real `pickle` and `_pickle`
-deserializers parse them as base-0 (accepting hex, e.g. `0x1337`). A payload
-built around that mismatch crashes `pickletools` while still executing fine
-under the real unpickler — a disclosed, bug-bounty-confirmed technique for
-bypassing `pickletools`-based scanners. `mlscan` treats a mid-stream parse
-failure as a `PICKLE_PARSE_ERROR` finding rather than crashing or silently
-reporting a clean scan.
-Source: Applegate & Kellas, *"PICKLEFUZZER: A Case Study in Fuzzing for
-Discrepancies Between Python Pickle Implementations"* (2026).
+```bash
+pip install modelscan
+modelscan -p tests/fixtures --show-skipped
+```
 
-**Restricted-unpickler gadget chains.** Even when a pickle only references
-"safe" modules/classes, `getattr`-style gadgets can walk the live class
-hierarchy (`int.__subclasses__()` → find a class whose
-`__init__.__globals__` exposes `__builtins__` → reach `eval`/`exec`/
-`os.system`) without ever directly referencing a dangerous function.
-`mlscan` flags `builtins.getattr`/`setattr`/`vars`/`operator.attrgetter` as
-dangerous callables, and independently flags gadget-chain attribute names
-(`__subclasses__`, `__globals__`, `__builtins__`, `__base__`, `__bases__`,
-`__mro__`) appearing anywhere in the opcode stream as `PICKLE_GADGET_CHAIN_ATTRIBUTE`
-(CRITICAL), regardless of which module exposed them.
-Source: Huang, Huang & Huang, *"Pain Pickle: Bypassing Python Restricted
-Unpickler for Automatic Exploit Generation"*, IEEE QRS (2022).
+Full comparison table: [`PROJECT_REPORT.md`, §8](PROJECT_REPORT.md).
 
-## Benchmark vs. ModelScan (Protect AI, v0.8.8)
+## Known limitations
 
-Ran `modelscan -p tests/fixtures` against our full fixture set:
+- Pickle protocol 0/1 (no `PROTO` opcode) has no reliable content-based
+  signature and falls back to extension-based detection.
+- `joblib`'s raw-array-embedding convention (used by some scikit-learn/LightGBM
+  exports) breaks pure opcode-stream parsing and produces a false-positive
+  parse-error finding — confirmed to affect ModelScan identically, not a
+  bug specific to this tool.
 
-| Finding | mlscan | ModelScan 0.8.8 |
-|---|---|---|
-| ONNX support at all | ✅ 3 rules (path traversal, custom domains, oversized dims) | ❌ every `.onnx` fixture silently skipped — no ONNX scanner in this version |
-| `int_opcode_hex_evasion.pkl` (base-10/base-0 discrepancy) | ✅ flagged `PICKLE_PARSE_ERROR`, HIGH | ⚠️ logged as a top-level "Error", **not counted in Total Issues** — a real malicious file that produces zero reported issues |
-| joblib `NumpyArrayWrapper` real-world false positive | ⚠️ flagged, documented `xfail` limitation | ⚠️ hits the identical parse error, also excluded from Issues — confirms this is a genuine `pickletools` limitation, not specific to either tool |
-| Keras Lambda severity granularity | ✅ distinguishes marshalled bytecode (CRITICAL) from named-function reference (MEDIUM) | Both reported as a single MEDIUM "unsafe operator", no distinction |
-| Zip-wrapped PyTorch checkpoints (`torch.save()` since 1.6) | ✅ unwraps and scans `data.pkl` | ✅ also unwraps and scans correctly |
-| `gadget_chain_subclasses.pkl` (`int.__subclasses__` gadget) | ✅ flagged CRITICAL `PICKLE_GADGET_CHAIN_ATTRIBUTE` | Not tested against this version — not included in the standard scan output categories observed |
+Full explanation and reasoning: [`PROJECT_REPORT.md`, §9](PROJECT_REPORT.md).
 
-Reproduce: `pip install modelscan && modelscan -p tests/fixtures --show-skipped`
+## Continuous integration
 
-## Optional ML anomaly-detection layer (experimental — `--ml`)
+Every push and pull request runs, via GitHub Actions
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
 
-A secondary, opt-in signal layered on top of the rule-based pickle scanner:
-an `IsolationForest` trained on opcode-derived structural features
-(22 dimensions — 9 scalars like byte length/entropy/opcode counts, plus
-frequency counts for 13 security-relevant opcodes such as `GLOBAL`,
-`REDUCE`, `BUILD`, `NEWOBJ`), fit on benign pickle files only. Requires
-`pip install -e ".[ml]"`; degrades gracefully to "no additional finding"
-if that extra isn't installed.
+```bash
+ruff check src tests
+pytest
+```
 
-**Training data required real cleanup.** `scripts/download_ml_training_corpus.py`
-pulls benign pickle files from HuggingFace Hub — but naive keyword search
-(`pkl`, `pickle`, `joblib`, ...) surfaces a large amount of genuinely
-malicious/proof-of-concept content published by security researchers
-(repos named things like `pickle-scanner-bypass-*`, `*-rce-poc`,
-`malicious_model.pkl`), not just real benign models. Of 214 candidate
-files collected, **our own rule-based scanner flagged and rejected 75
-of them (35%)** before training — using `mlscan` itself as a
-data-quality gate on its own training data. 139 genuine samples survived
-to train on.
+## Reference material
 
-**Honest result: this layer currently adds no measurable detection
-power.** Evaluated against our fixture set
-(`scripts/evaluate_anomaly_model.py`), the model's raw anomaly scores
-show no separation between benign and malicious pickle files — the
-known-malicious fixtures actually scored *slightly more "normal"* than
-one of the benign files. This isn't a calibration/threshold issue (we
-checked the raw `decision_function` scores directly, not just the
-pass/fail label). The root cause: our malicious fixtures are minimal,
-single-`GLOBAL`+`REDUCE` payloads that are structurally simple — low
-opcode diversity, small size — which doesn't register as "unusual" by
-any of the 22 gross structural statistics this layer tracks. What makes
-them dangerous is *semantic* (which specific callable is referenced),
-not *structural*, and that's exactly what the rule-based scanner already
-checks directly. This is a legitimate negative result, not a bug: it
-demonstrates concretely why gross structural/statistical ML features
-can't substitute for rule-based semantic checks on this kind of file,
-rather than just asserting that claim.
-
-Reproduce: `python scripts/download_ml_training_corpus.py && python
-scripts/train_pickle_anomaly_model.py && python
-scripts/evaluate_anomaly_model.py`
-
-## References
+Primary sources behind the detection rules (full PDFs in
+[`related materials/`](related%20materials/)):
 
 - E. Sultanik, *"Never a dill moment: Exploiting machine learning pickle
   files"*, Trail of Bits (2021) — [`fickling`](https://github.com/trailofbits/fickling)
-- Protect AI — [`modelscan`](https://github.com/protectai/modelscan)
 - Huang, Huang & Huang, *"Pain Pickle: Bypassing Python Restricted
   Unpickler for Automatic Exploit Generation"*, IEEE QRS (2022)
-- Applegate & Kellas, *"PICKLEFUZZER: A Case Study in Fuzzing for
+- Applegate & Kellas, *"PickleFuzzer: A Case Study in Fuzzing for
   Discrepancies Between Python Pickle Implementations"* (2026)
+- *"Interoperability in Deep Learning: A User Survey and Failure Analysis
+  of ONNX Model Converters"*
+- *"An overview of the HDF5 technology suite and its applications"*
+- Protect AI — [`modelscan`](https://github.com/protectai/modelscan)
+
+For how each of these informed a specific detection rule, see
+[`PROJECT_REPORT.md`, §11](PROJECT_REPORT.md).
 
 ## License
 
-MIT
+[MIT](LICENSE)
